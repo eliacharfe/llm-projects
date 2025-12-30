@@ -1,6 +1,5 @@
 import os
 from dotenv import load_dotenv
-# from scraper import fetch_website_contents
 from IPython.display import Markdown, display
 from openai import OpenAI
 from bs4 import BeautifulSoup
@@ -43,10 +42,6 @@ def summarize(url):
         messages = messages_for(website)
     )
     return response.choices[0].message.content
-
-# def display_summary(url):
-#     summary = summarize(url)
-#     display(Markdown(summary))
 
 def display_summary(url):
     summary = summarize(url)
