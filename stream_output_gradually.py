@@ -1,34 +1,35 @@
 import os
-from dotenv import load_dotenv
-from openai import OpenAI
 import sys
 import time
+from dotenv import load_dotenv
+from openai import OpenAI
 
-MODEL_GPT = 'gpt-4o-mini'
-MODEL_LLAMA = 'llama3.2'
-
-load_dotenv(override=True)
-api_key = os.getenv('OPENAI_API_KEY')
-
-if api_key and api_key.startswith('sk-proj-') and len(api_key) > 10:
-    print("API key looks good so far")
-else:
-    print("There might be a problem with your API key? Please visit the troubleshooting notebook!")
+MODEL_GPT = "gpt-4o-mini"
+MODEL_LLAMA = "llama3.2"
+OLLAMA_BASE_URL = "http://localhost:11434/v1"
 
 
-def explain_technical_question(model, code) -> str:
+def check_api_key() -> str | None:
+    load_dotenv(override=True)
+    api_key = os.getenv("OPENAI_API_KEY")
+
+    if api_key and api_key.startswith("sk-proj-") and len(api_key) > 10:
+        print("API key looks good so far")
+    else:
+        print("There might be a problem with your API key? Please visit the troubleshooting notebook!")
+
+    return api_key
+
+
+def explain_technical_question(client: OpenAI, model: str, code: str) -> str:
     user_prompt_question = f"Please explain what this code does and why:\n\n{code}"
-
     print(f"Generating explanation to the code: {code} using model {model}")
 
-    response = openai.chat.completions.create(
+    response = client.chat.completions.create(
         model=model,
-        messages=[
-            {"role": "user", "content": user_prompt_question}
-        ]
+        messages=[{"role": "user", "content": user_prompt_question}],
     )
-    result = response.choices[0].message.content
-    return result
+    return response.choices[0].message.content or ""
 
 
 def _in_notebook() -> bool:
@@ -41,11 +42,12 @@ def _in_notebook() -> bool:
 
 
 def stream_text_response(
-        prompt: str = "Tell me a fun fact about space in 2-3 sentences.",
-        model: str = "gpt-4.1-mini",
-        chunk_delay_sec: float = 0.02,
-):
-    stream = openai.chat.completions.create(
+    client: OpenAI,
+    prompt: str,
+    model: str,
+    chunk_delay_sec: float = 0.02,
+) -> str:
+    stream = client.chat.completions.create(
         model=model,
         messages=[{"role": "user", "content": prompt}],
         stream=True,
@@ -85,19 +87,30 @@ def stream_text_response(
     return response
 
 
-openai = OpenAI()
+def run_explain_and_stream(client: OpenAI, model: str, code: str) -> None:
+    explanation = explain_technical_question(client, model, code)
+    streamed = stream_text_response(client, explanation, model=model)
+    if _in_notebook():
+        print(streamed)
 
-text = explain_technical_question(MODEL_GPT, "yield from {book.get('author') for book in books if book.get('author')}")
-print(stream_text_response(text, model=MODEL_GPT))
 
-print("----------------------")
-print("----------------------")
+def main() -> int:
+    api_key = check_api_key()
 
-# Get Llama 3.2 to answer
+    code_snippet = "yield from {book.get('author') for book in books if book.get('author')}"
 
-OLLAMA_BASE_URL = "http://localhost:11434/v1"
+    # OpenAI
+    openai_client = OpenAI(api_key=api_key)
+    run_explain_and_stream(openai_client, MODEL_GPT, code_snippet)
 
-openai = OpenAI(base_url=OLLAMA_BASE_URL, api_key='ollama')
+    print("\n----------------------\n----------------------\n")
 
-text = explain_technical_question(MODEL_LLAMA, "yield from {book.get('author') for book in books if book.get('author')}")
-print(stream_text_response(text, model=MODEL_LLAMA))
+    # Ollama (Llama 3.2)
+    ollama_client = OpenAI(base_url=OLLAMA_BASE_URL, api_key="ollama")
+    run_explain_and_stream(ollama_client, MODEL_LLAMA, code_snippet)
+
+    return 0
+
+
+if __name__ == "__main__":
+    main()

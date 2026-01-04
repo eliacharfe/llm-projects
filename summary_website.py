@@ -1,74 +1,112 @@
 import os
+import sys
 from dotenv import load_dotenv
-from IPython.display import Markdown, display
 from openai import OpenAI
 from bs4 import BeautifulSoup
 import requests
 
-load_dotenv(override=True)
-api_key = os.getenv('OPENAI_API_KEY')
-headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
-if not api_key:
-    print("No API key was found - please head over to the troubleshooting notebook in this folder to identify & fix!")
-elif not api_key.startswith("sk-proj-"):
-    print("An API key was found, but it doesn't start sk-proj-; please check you're using the right key - see troubleshooting notebook")
-else:
-    print("API key found and looks good so far!")
+MODEL = "gpt-5-nano"
 
-system_prompt = """
+SYSTEM_PROMPT = """
 You are a helpful assistant that analyzes the contents of a website,
 and provides a short summary, ignoring text that might be navigation related.
 Respond in markdown. Do not wrap the markdown in a code block - respond just with the markdown.
-"""
+""".strip()
 
-user_prompt_prefix = """
+USER_PROMPT_PREFIX = """
 Here are the contents of a website.
 Provide a short summary of this website.
 If it includes news or announcements, then summarize these too.
 
-"""
+""".lstrip()
 
-def messages_for(website):
+
+def load_api_key() -> str | None:
+    load_dotenv(override=True)
+    return os.getenv("OPENAI_API_KEY")
+
+
+def validate_api_key(api_key: str | None) -> bool:
+    if not api_key:
+        print(
+            "No API key was found - please head over to the troubleshooting notebook in this folder to identify & fix!"
+        )
+        return False
+    if not api_key.startswith("sk-proj-"):
+        print(
+            "An API key was found, but it doesn't start sk-proj-; please check you're using the right key - see troubleshooting notebook"
+        )
+        return False
+
+    print("API key found and looks good so far!")
+    return True
+
+
+def build_messages(website_text: str) -> list[dict[str, str]]:
     return [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt_prefix + website}
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": USER_PROMPT_PREFIX + website_text},
     ]
 
-def summarize(url):
-    website = fetch_website_contents(url)
-    response = openai.chat.completions.create(
-        model = "gpt-5-nano",
-        messages = messages_for(website)
-    )
-    return response.choices[0].message.content
 
-def display_summary(url):
-    summary = summarize(url)
-    print(summary)
-
-def fetch_website_contents(url):
+def fetch_website_contents(url: str, request_headers: dict[str, str], limit: int = 2_000) -> str:
     """
     Return the title and contents of the website at the given url;
-    truncate to 2,000 characters as a sensible limit
+    truncate to `limit` characters as a sensible limit.
     """
-    response = requests.get(url, headers=headers)
-    soup = BeautifulSoup(response.content, "html.parser")
-    title = soup.title.string if soup.title else "No title found"
+    resp = requests.get(url, headers=request_headers, timeout=20)
+    resp.raise_for_status()
+
+    soup = BeautifulSoup(resp.content, "html.parser")
+
+    title = soup.title.string.strip() if soup.title and soup.title.string else "No title found"
+
     if soup.body:
         for irrelevant in soup.body(["script", "style", "img", "input"]):
             irrelevant.decompose()
         text = soup.body.get_text(separator="\n", strip=True)
     else:
         text = ""
-    return (title + "\n\n" + text)[:2_000]
+
+    return (title + "\n\n" + text)[:limit]
 
 
+def summarize_url(client: OpenAI, url: str, request_headers: dict[str, str], model: str = MODEL) -> str:
+    website = fetch_website_contents(url, request_headers=request_headers)
+    response = client.chat.completions.create(
+        model=model,
+        messages=build_messages(website),
+    )
+    return response.choices[0].message.content or ""
 
-openai = OpenAI()
 
-# display_summary("https://eliacharfeig.com")
-print(display_summary("https://edwarddonner.com"))
+def display_summary(client: OpenAI, url: str, request_headers: dict[str, str]) -> None:
+    summary = summarize_url(client, url, request_headers=request_headers)
+    print(summary)
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = argv or sys.argv[1:]
+    url = argv[0] if argv else "https://edwarddonner.com"
+
+    api_key = load_api_key()
+    if not validate_api_key(api_key):
+        return 1
+
+    request_headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0 Safari/537.36"
+    }
+
+    client = OpenAI(api_key=api_key)
+
+    display_summary(client, url, request_headers=request_headers)
+    return 0
+
+
+if __name__ == "__main__":
+    main()
+
 
 # message = "Hello, GPT! This is my first ever message to you! Hi!"
 #
