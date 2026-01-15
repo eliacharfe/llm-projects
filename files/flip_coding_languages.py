@@ -1,60 +1,11 @@
 import os
-from dotenv import load_dotenv
-from openai import OpenAI
 import subprocess
+from openai import OpenAI
 from system_info import retrieve_system_info
-from helpers import stream_text_response
+import helpers
 
-
-load_dotenv(override=True)
-openai_api_key = os.getenv('OPENAI_API_KEY')
-anthropic_api_key = os.getenv('ANTHROPIC_API_KEY')
-google_api_key = os.getenv('GOOGLE_API_KEY')
-grok_api_key = os.getenv('GROK_API_KEY')
-
-if openai_api_key:
-    print(f"OpenAI API Key exists and begins {openai_api_key[:8]}")
-else:
-    print("OpenAI API Key not set")
-
-if anthropic_api_key:
-    print(f"Anthropic API Key exists and begins {anthropic_api_key[:7]}")
-else:
-    print("Anthropic API Key not set (and this is optional)")
-
-if google_api_key:
-    print(f"Google API Key exists and begins {google_api_key[:2]}")
-else:
-    print("Google API Key not set (and this is optional)")
-
-if grok_api_key:
-    print(f"Grok API Key exists and begins {grok_api_key[:4]}")
-else:
-    print("Grok API Key not set (and this is optional)")
-
-
-
-
-openai = OpenAI()
-
-anthropic_url = "https://api.anthropic.com/v1/"
-gemini_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
-grok_url = "https://api.x.ai/v1"
-
-anthropic = OpenAI(api_key=anthropic_api_key, base_url=anthropic_url)
-gemini = OpenAI(api_key=google_api_key, base_url=gemini_url)
-grok = OpenAI(api_key=grok_api_key, base_url=grok_url)
-
-OPENAI_MODEL = "gpt-5"
-CLAUDE_MODEL = "claude-sonnet-4-5-20250929"
-GROK_MODEL = "grok-4"
-GEMINI_MODEL = "gemini-2.5-pro"
-
-
-system_info = retrieve_system_info()
-print(system_info)
-
-message = f"""
+def build_compiler_help_message(system_info: str) -> str:
+    return f"""
 Here is a report of the system information for my computer.
 I want to run a C++ compiler to compile a single C++ file called main.cpp and then execute it in the simplest way possible.
 Please reply with whether I need to install any C++ compiler to do this. If so, please provide the simplest step by step instructions to do so.
@@ -73,93 +24,133 @@ System information:
 {system_info}
 """
 
-print("fetching data...")
-response = openai.chat.completions.create(model=OPENAI_MODEL, messages=[{"role": "user", "content": message}])
-# print(response.choices[0].message.content)
-stream_text_response(client=openai, prompt=response.choices[0].message.content, model=OPENAI_MODEL)
+def ask_for_compiler_commands(client: OpenAI, model: str, system_info: str) -> str:
+    message = build_compiler_help_message(system_info)
+    print("fetching data...")
+    response = client.chat.completions.create(
+    model=model,
+    messages=[{"role": "user", "content": message}],
+    )
+    answer = response.choices[0].message.content or ""
+    helpers.stream_text_response(client=client, prompt=answer, model=model)
+    return answer
 
+SYSTEM_PROMPT_CPP = """
+    Your task is to convert Python code into high performance C++ code.
+    Respond only with C++ code. Do not provide any explanation other than occasional comments.
+    The C++ response needs to produce an identical output in the fastest possible time.
+    """.strip()
 
-system_prompt = """
-Your task is to convert Python code into high performance C++ code.
-Respond only with C++ code. Do not provide any explanation other than occasional comments.
-The C++ response needs to produce an identical output in the fastest possible time.
-"""
-
-def user_prompt_for(python):
+def user_prompt_for(python_code: str, system_info: str, compile_command: str) -> str:
     return f"""
-Port this Python code to C++ with the fastest possible implementation that produces identical output in the least time.
-The system information is:
-{system_info}
-Your response will be written to a file called main.cpp and then compiled and executed; the compilation command is:
-{compile_command}
-Respond only with C++ code.
-Python code to port:
+    Port this Python code to C++ with the fastest possible implementation that produces identical output in the least time.
+    The system information is:
+    {system_info}
+    Your response will be written to a file called main.cpp and then compiled and executed; the compilation command is:
+    {compile_command}
+    Respond only with C++ code.
+    Python code to port:
+    {python_code}
+    """.strip()
 
-```python
-{python}
-```
-"""
-
-
-def messages_for(python):
+def messages_for(python_code: str, system_info: str, compile_command: str):
     return [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt_for(python)}
+    {"role": "system", "content": SYSTEM_PROMPT_CPP},
+    {"role": "user", "content": user_prompt_for(python_code, system_info, compile_command)},
     ]
 
-
-def write_output(cpp):
-    with open("main.cpp", "w", encoding="utf-8") as f:
+def write_output(cpp: str, filename: str = "main.cpp") -> None:
+    with open(filename, "w", encoding="utf-8") as f:
         f.write(cpp)
 
-def port(client, model, python):
-    reasoning_effort = "high" if 'gpt' in model else None
-    response = client.chat.completions.create(model=model, messages=messages_for(python), reasoning_effort=reasoning_effort)
-    reply = response.choices[0].message.content
-    reply = reply.replace('```cpp','').replace('```','')
-    write_output(reply)
+def clean_cpp_fence(text: str) -> str:
+    return text.replace("cpp", "").replace("", "").strip()
 
-pi = """
-import time
+def port_python_to_cpp(
+client: OpenAI,
+    model: str,
+    python_code: str,
+    system_info: str,
+    compile_command: str,
+    ) -> str:
+    reasoning_effort = "high" if "gpt" in model.lower() else None
+    response = client.chat.completions.create(
+    model=model,
+    messages=messages_for(python_code, system_info, compile_command),
+    reasoning_effort=reasoning_effort,
+    )
+    reply = response.choices[0].message.content or ""
+    cpp = clean_cpp_fence(reply)
+    write_output(cpp)
+    return cpp
 
-def calculate(iterations, param1, param2):
-    result = 1.0
-    for i in range(1, iterations+1):
-        j = i * param1 - param2
-        result -= (1/j)
-        j = i * param1 + param2
-        result += (1/j)
-    return result
-
-start_time = time.time()
-result = calculate(200_000_000, 4, 1) * 4
-end_time = time.time()
-
-print(f"Result: {result:.12f}")
-print(f"Execution Time: {(end_time - start_time):.6f} seconds")
-"""
 
 def run_python(code):
+    print("\n\nRunning pyhon code...")
     globals = {"__builtins__": __builtins__}
     exec(code, globals)
 
-run_python(pi)
+import textwrap
 
-port(openai, OPENAI_MODEL, pi)
+def main() -> None:
+    keys = helpers.load_keys()
+    helpers.print_key_status(keys)
+    helpers.clients = helpers.build_clients(keys)
+    models = helpers.ModelConfig()
+
+    system_info = retrieve_system_info()
+    print(system_info)
+
+    ask_for_compiler_commands(
+        client=helpers.clients.openai,
+        model=models.openai_model,
+        system_info=system_info,
+    )
+
+    pi = textwrap.dedent("""
+    import time
+
+    def calculate(iterations, param1, param2):
+        result = 1.0
+        for i in range(1, iterations + 1):
+            j = i * param1 - param2
+            result -= (1 / j)
+            j = i * param1 + param2
+            result += (1 / j)
+        return result
+
+    start_time = time.time()
+    result = calculate(200_000_000, 4, 1) * 4
+    end_time = time.time()
+
+    print(f"Result: {result:.12f}")
+    print(f"Execution Time: {(end_time - start_time):.6f} seconds")
+    """).strip()
+
+    run_python(pi)
+
+    # Change this according to the streamed output from the LLM according to your machine system
+    compile_command = ["clang++", "-std=c++20", "-O3", "-march=native", "main.cpp", "-o", "main"]
+
+    print("\n\nConvert to .cpp\n\n")
+    port_python_to_cpp(
+        client=helpers.clients.openai,
+        model=models.openai_model,
+        python_code=pi,
+        system_info=system_info,
+        compile_command=compile_command,
+    )
+
+    if not os.path.exists("main.cpp"):
+        raise FileNotFoundError("main.cpp was not created")
+
+    run_command = ["./main"]
+
+    subprocess.run(compile_command, check=True, text=True, capture_output=True)
+    print(subprocess.run(run_command, check=True, text=True, capture_output=True).stdout)
 
 
+if __name__ == "__main__":
+    main()
 
 
-# AFTER main.cpp is created UNCOMMENT run the following commands:
-
-
-# compile_command = ["clang++", "-std=c++17", "-Ofast", "-mcpu=native", "-flto=thin", "-fvisibility=hidden", "-DNDEBUG", "main.cpp", "-o", "main"]
-# run_command = ["./main"]
-#
-# def compile_and_run():
-#     subprocess.run(compile_command, check=True, text=True, capture_output=True)
-#     print(subprocess.run(run_command, check=True, text=True, capture_output=True).stdout)
-#     print(subprocess.run(run_command, check=True, text=True, capture_output=True).stdout)
-#     print(subprocess.run(run_command, check=True, text=True, capture_output=True).stdout)
-#
-# compile_and_run()
