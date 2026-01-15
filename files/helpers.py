@@ -95,9 +95,9 @@ def in_notebook() -> bool:
 
 
 def stream_text_response(
-    client: OpenAI,
     prompt: str,
-    model: str,
+    client: OpenAI | None = None,
+    model: str = ModelConfig.openai_model,
     chunk_delay_sec: float = 0.02,
 ) -> str:
     stream = client.chat.completions.create(
