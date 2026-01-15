@@ -3,6 +3,7 @@ import subprocess
 from openai import OpenAI
 from system_info import retrieve_system_info
 import helpers
+import textwrap
 
 def build_compiler_help_message(system_info: str) -> str:
     return f"""
@@ -90,7 +91,6 @@ def run_python(code):
     globals = {"__builtins__": __builtins__}
     exec(code, globals)
 
-import textwrap
 
 def main() -> None:
     keys = helpers.load_keys()
